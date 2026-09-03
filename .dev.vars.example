@@ -1,0 +1,3 @@
+GUEST_PASSWORD=changeme
+ADMIN_PASSWORD=changeme-admin
+SESSION_SECRET=replace-with-a-long-random-string

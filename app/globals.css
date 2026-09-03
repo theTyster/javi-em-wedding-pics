@@ -1,26 +1,82 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* One committed palette, deliberately not a light/dark pair.
+
+   Every surface in this app is designed around photographs, and photographs
+   read truer against a dark, slightly chromatic ground than against grey.
+   Shipping a `prefers-color-scheme` fork would mean designing two apps; the
+   half-built second one is what made body text invisible on white panels. */
+@theme {
+  --color-ink: #191320; /* page ground — warm aubergine-black, not tinted grey */
+  --color-ink-raised: #241d2d; /* upload bar, comment sheet */
+  --color-ink-sunk: #120d18; /* image wells behind a loading photo */
+  --color-rule: #3a3044; /* hairlines */
+  --color-chalk: #f0ecf2; /* primary text */
+  --color-chalk-dim: #a498ae; /* secondary text, placeholders */
+  --color-foil: #e0bd7f; /* champagne — primary action only */
+  --color-foil-deep: #b08c4e; /* pressed / disabled foil */
+  --color-alarm: #f0908a; /* errors, legible on ink as red-600 is not */
+
+  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-sans: var(--font-karla), system-ui, sans-serif;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  /* Scales all rem-based sizing up ~18px base — this app is used heavily by
+     older guests on phones, so err toward larger text and tap targets. */
+  font-size: 112.5%;
+  color-scheme: dark; /* form controls, scrollbars and the URL bar follow */
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ink);
+  color: var(--color-chalk);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: var(--color-foil);
+  color: var(--color-ink);
+}
+
+/* One field treatment for the whole app, defined once. Form controls inherit
+   `color` from Tailwind's preflight, so they also need the ground painted
+   under them explicitly — otherwise they sit transparent on whatever surface
+   they land on. A sunk well plus a full hairline is what makes a box read as
+   "type here" to someone who is not looking for it. */
+input[type="text"],
+input[type="password"] {
+  background: var(--color-ink-sunk);
+  color: var(--color-chalk);
+  border: 1px solid var(--color-rule);
+  border-radius: 2px;
+}
+
+input::placeholder {
+  color: var(--color-chalk-dim);
+}
+
+input:focus {
+  border-color: var(--color-foil);
+}
+
+/* Pointer focus gets the border change alone; keyboard focus keeps the ring
+   from :focus-visible below. */
+input:focus:not(:focus-visible) {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-foil);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

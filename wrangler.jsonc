@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "javi-em-wedding-pics",
+  "pages_build_output_dir": "out",
+  "compatibility_date": "2026-09-02",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "javi-em-wedding-pics",
+      "database_id": "e6fc9557-4fa7-4136-a4bc-5e2cedff3a6b"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "javi-em-wedding-pics"
+    }
+  ],
+  "vars": {
+    // Uploads (R2 writes) are rejected after this date; viewing, commenting,
+    // and deleting stay open. This is the cost bound for R2 — move this date
+    // if the upload window needs to change, no code change needed.
+    "UPLOAD_DEADLINE": "2026-09-30T23:59:59Z"
+  }
+}
