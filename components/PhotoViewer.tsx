@@ -5,12 +5,14 @@ import {
   addComment,
   deleteComment,
   deletePhoto,
+  downloadUrl,
   listComments,
   photoUrl,
   ApiError,
   type CommentDTO,
   type PhotoDTO,
 } from "@/lib/api";
+import { mediaAlt } from "@/lib/media";
 import { getStoredName, setStoredName } from "@/lib/localName";
 
 export default function PhotoViewer({
@@ -106,7 +108,7 @@ export default function PhotoViewer({
 
   async function handleDeletePhoto() {
     if (!photo || deleting) return;
-    if (!window.confirm("Remove this photo? This can't be undone.")) return;
+    if (!window.confirm("Remove this? This can't be undone.")) return;
     setDeleting(true);
     try {
       await deletePhoto(photo.id);
@@ -150,6 +152,8 @@ export default function PhotoViewer({
 
   if (!photo) return null;
 
+  const isVideo = photo.kind === "video";
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-ink">
       <div className="flex items-center justify-between px-4 py-3">
@@ -161,34 +165,55 @@ export default function PhotoViewer({
         >
           ✕
         </button>
-        {photo.canDelete && (
-          <button
-            type="button"
-            onClick={handleDeletePhoto}
-            disabled={deleting}
-            className="rounded-full bg-chalk/10 px-4 py-3 text-base text-alarm disabled:text-chalk-dim"
+        <div className="flex items-center gap-2">
+          {/* The only download in the app. A plain link, because the server sets
+              Content-Disposition and picks the best variant it holds: every
+              guest gets the same bytes under the same filename whether they are
+              on an iPhone, an Android or a laptop, instead of whatever their
+              platform's long-press menu happens to grab. A link also streams
+              straight to disk, which a 2 GiB video could not survive being
+              buffered into a Blob for. */}
+          <a
+            href={downloadUrl(photo.id)}
+            download
+            className="rounded-full bg-chalk/10 px-4 py-3 text-base text-chalk"
           >
-            {deleting ? "Removing…" : "Remove photo"}
-          </button>
-        )}
+            {isVideo ? "Save video" : "Save photo"}
+          </a>
+          {photo.canDelete && (
+            <button
+              type="button"
+              onClick={handleDeletePhoto}
+              disabled={deleting}
+              className="rounded-full bg-chalk/10 px-4 py-3 text-base text-alarm disabled:text-chalk-dim"
+            >
+              {deleting ? "Removing…" : isVideo ? "Remove video" : "Remove photo"}
+            </button>
+          )}
+        </div>
       </div>
 
       <div
         className="relative flex flex-1 items-center justify-center overflow-hidden"
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
+        // Swipe-to-navigate would fight the scrub bar, so a video is driven by
+        // its own controls plus the arrows and the keyboard.
+        onTouchStart={isVideo ? undefined : handleTouchStart}
+        onTouchEnd={isVideo ? undefined : handleTouchEnd}
       >
         {/* The thumbnail is already in the browser cache from the grid, so it
             stands in — blurred up — while the full frame arrives over cell
-            data. The only motion in the app, and it answers a tap. */}
-        <div
-          aria-hidden="true"
-          className="absolute inset-6 scale-105 bg-contain bg-center bg-no-repeat blur-2xl transition-opacity duration-300"
-          style={{
-            backgroundImage: `url(${photoUrl(photo.id, "thumb")})`,
-            opacity: fullLoaded ? 0 : 1,
-          }}
-        />
+            data. The only motion in the app, and it answers a tap. A video gets
+            the same frame through the native `poster` attribute instead. */}
+        {!isVideo && (
+          <div
+            aria-hidden="true"
+            className="absolute inset-6 scale-105 bg-contain bg-center bg-no-repeat blur-2xl transition-opacity duration-300"
+            style={{
+              backgroundImage: `url(${photoUrl(photo.id, "thumb")})`,
+              opacity: fullLoaded ? 0 : 1,
+            }}
+          />
+        )}
         {prevPhoto && (
           <button
             type="button"
@@ -199,15 +224,31 @@ export default function PhotoViewer({
             ‹
           </button>
         )}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          key={photo.id}
-          src={photoUrl(photo.id, "full")}
-          alt={photo.uploaderName ? `Photo from ${photo.uploaderName}` : "Wedding photo"}
-          onLoad={() => setFullLoaded(true)}
-          className="relative max-h-full max-w-full object-contain transition-opacity duration-300"
-          style={{ opacity: fullLoaded ? 1 : 0 }}
-        />
+        {isVideo ? (
+          // `preload="metadata"` so opening a clip costs a few kilobytes rather
+          // than the whole file; the bytes arrive as the player asks for them,
+          // which is why the file endpoint has to honour Range requests.
+          <video
+            key={photo.id}
+            src={photoUrl(photo.id, "video")}
+            poster={photoUrl(photo.id, "thumb")}
+            aria-label={mediaAlt(photo)}
+            controls
+            playsInline
+            preload="metadata"
+            className="relative max-h-full max-w-full"
+          />
+        ) : (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            key={photo.id}
+            src={photoUrl(photo.id, "full")}
+            alt={mediaAlt(photo)}
+            onLoad={() => setFullLoaded(true)}
+            className="relative max-h-full max-w-full object-contain transition-opacity duration-300"
+            style={{ opacity: fullLoaded ? 1 : 0 }}
+          />
+        )}
         {nextPhoto && (
           <button
             type="button"

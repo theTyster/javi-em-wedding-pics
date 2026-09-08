@@ -7,7 +7,8 @@
     {
       "binding": "DB",
       "database_name": "javi-em-wedding-pics",
-      "database_id": "e6fc9557-4fa7-4136-a4bc-5e2cedff3a6b"
+      "database_id": "e6fc9557-4fa7-4136-a4bc-5e2cedff3a6b",
+      "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [

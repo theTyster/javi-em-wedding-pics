@@ -2,6 +2,7 @@
 
 import type { PhotoDTO } from "@/lib/api";
 import { photoUrl } from "@/lib/api";
+import { formatDuration, mediaAlt } from "@/lib/media";
 
 export default function PhotoGrid({
   photos,
@@ -28,16 +29,29 @@ export default function PhotoGrid({
           // Square cells keep the newest-first reading order intact and give
           // every photo the same weight on the wall; the viewer shows the
           // uncropped frame, which is where composition actually matters.
-          className="aspect-square overflow-hidden bg-ink-sunk"
+          className="relative aspect-square overflow-hidden bg-ink-sunk"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={photoUrl(photo.id, "thumb")}
-            alt={photo.uploaderName ? `Photo from ${photo.uploaderName}` : "Wedding photo"}
+            alt={mediaAlt(photo)}
             loading="lazy"
             decoding="async"
             className="h-full w-full object-cover"
           />
+          {photo.kind === "video" && (
+            // A video tile is a still frame like any other, so it needs a mark
+            // that says "this moves" before the guest taps it — and the runtime,
+            // so nobody starts a four-minute clip expecting a snapshot.
+            <span className="pointer-events-none absolute bottom-1 left-1 flex items-center gap-1 rounded-sm bg-ink/70 px-1.5 py-0.5 text-sm text-chalk">
+              <span aria-hidden="true">▶</span>
+              {photo.durationMs ? (
+                formatDuration(photo.durationMs)
+              ) : (
+                <span className="sr-only">Video</span>
+              )}
+            </span>
+          )}
         </button>
       ))}
     </div>

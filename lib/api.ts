@@ -1,10 +1,17 @@
 export interface PhotoDTO {
   id: string;
+  kind: "photo" | "video";
   width: number;
   height: number;
+  durationMs: number | null;
   uploaderName: string | null;
   createdAt: number;
   canDelete: boolean;
+}
+
+export interface UploadedPart {
+  partNumber: number;
+  etag: string;
 }
 
 export interface CommentDTO {
@@ -85,6 +92,42 @@ export function deleteComment(id: string) {
   return call<{ ok: true }>(`/api/comments/${id}`, { method: "DELETE" });
 }
 
-export function photoUrl(id: string, variant: "thumb" | "full"): string {
+export function createVideoUpload(input: {
+  bytes: number;
+  width: number;
+  height: number;
+  durationMs: number | null;
+  mimeType: string;
+  uploaderName: string;
+}) {
+  return call<{ id: string; uploadId: string; partSize: number }>("/api/videos", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function completeVideoUpload(id: string, uploadId: string, parts: UploadedPart[], thumb: Blob) {
+  const form = new FormData();
+  form.append("uploadId", uploadId);
+  form.append("parts", JSON.stringify(parts));
+  form.append("thumb", thumb, "thumb.jpg");
+  return call<{ photo: PhotoDTO }>(`/api/videos/${id}/complete`, { method: "POST", body: form });
+}
+
+export function cancelVideoUpload(id: string, uploadId: string) {
+  return call<{ ok: true }>(`/api/videos/${id}?uploadId=${encodeURIComponent(uploadId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function photoUrl(id: string, variant: "thumb" | "full" | "video"): string {
   return `/api/photos/${id}/file?v=${variant}`;
+}
+
+// The one download path in the app. Every guest, on every platform, gets these
+// bytes — the server picks the best variant it holds and sets the filename, so
+// nothing is left to whatever the browser's long-press menu decides to do.
+export function downloadUrl(id: string): string {
+  return `/api/photos/${id}/file?v=download`;
 }

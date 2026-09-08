@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { processImage } from "@/lib/imageProcessing";
+import { uploadVideo } from "@/lib/videoUpload";
 import { uploadPhoto, ApiError, type PhotoDTO } from "@/lib/api";
 import { getStoredName, setStoredName } from "@/lib/localName";
 
@@ -10,6 +11,9 @@ const CONCURRENCY = 2;
 interface QueueItem {
   name: string;
   status: "pending" | "processing" | "uploading" | "done" | "error";
+  // Videos are big enough that "uploading" on its own tells a guest nothing;
+  // photos finish too fast for a bar to be worth drawing.
+  progress?: number;
   error?: string;
 }
 
@@ -35,6 +39,7 @@ export default function UploadButton({ onUploaded }: { onUploaded: (photo: Photo
   );
   const doneCount = queue.filter((item) => item.status === "done" || item.status === "error").length;
   const failed = queue.filter((item) => item.status === "error");
+  const active = queue.find((item) => item.status === "uploading" && item.progress !== undefined);
 
   function handleNameChange(value: string) {
     setName(value);
@@ -58,13 +63,25 @@ export default function UploadButton({ onUploaded }: { onUploaded: (photo: Photo
       while (nextIndex < fileArray.length) {
         const i = nextIndex++;
         const file = fileArray[i];
+        const isVideo = file.type.startsWith("video/") || /\.(mp4|m4v|mov|qt|webm)$/i.test(file.name);
         updateItem(i, { status: "processing" });
         try {
-          const image = await processImage(file);
-          updateItem(i, { status: "uploading" });
-          const { photo } = await uploadPhoto(image, nameRef.current.trim());
-          updateItem(i, { status: "done" });
-          onUploaded(photo);
+          if (isVideo) {
+            // uploadVideo draws its own poster first, so there is no separate
+            // processing step to report here.
+            updateItem(i, { status: "uploading", progress: 0 });
+            const photo = await uploadVideo(file, nameRef.current.trim(), (fraction) =>
+              updateItem(i, { progress: fraction })
+            );
+            updateItem(i, { status: "done" });
+            onUploaded(photo);
+          } else {
+            const image = await processImage(file);
+            updateItem(i, { status: "uploading" });
+            const { photo } = await uploadPhoto(image, nameRef.current.trim());
+            updateItem(i, { status: "done" });
+            onUploaded(photo);
+          }
         } catch (err) {
           const message = err instanceof ApiError ? err.message : "This file isn't a photo we can read.";
           updateItem(i, { status: "error", error: message });
@@ -91,7 +108,7 @@ export default function UploadButton({ onUploaded }: { onUploaded: (photo: Photo
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/*"
         multiple
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
@@ -102,8 +119,22 @@ export default function UploadButton({ onUploaded }: { onUploaded: (photo: Photo
         disabled={uploading}
         className="w-full rounded-sm bg-foil px-4 py-4 text-xl font-semibold text-ink disabled:bg-foil-deep disabled:text-ink/60"
       >
-        {uploading ? `Adding ${doneCount + 1} of ${queue.length}…` : "Add your photos"}
+        {uploading ? `Adding ${doneCount + 1} of ${queue.length}…` : "Add your photos & videos"}
       </button>
+
+      {active && (
+        <div
+          role="progressbar"
+          aria-label={`Uploading ${active.name}`}
+          aria-valuenow={Math.round((active.progress ?? 0) * 100)}
+          className="h-1 w-full overflow-hidden rounded-sm bg-ink-sunk"
+        >
+          <div
+            className="h-full bg-foil transition-[width] duration-300"
+            style={{ width: `${Math.round((active.progress ?? 0) * 100)}%` }}
+          />
+        </div>
+      )}
 
       {failed.length > 0 && !uploading && (
         <ul className="text-base text-alarm">

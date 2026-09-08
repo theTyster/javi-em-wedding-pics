@@ -1,15 +1,7 @@
 import type { Env } from "../../_lib/env";
 import { getSession } from "../../_lib/session";
 import { json, errorJson } from "../../_lib/json";
-
-interface PhotoRow {
-  id: string;
-  width: number;
-  height: number;
-  uploader_id: string;
-  uploader_name: string | null;
-  created_at: number;
-}
+import { deleteMedia, fullKey, thumbKey, toMediaDTO, uploadsClosedReason, type MediaRow } from "../../_lib/media";
 
 const MAX_LIMIT = 60;
 const DEFAULT_LIMIT = 30;
@@ -26,7 +18,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, data }) =
   const limit = Math.min(MAX_LIMIT, Math.max(1, Number(url.searchParams.get("limit")) || DEFAULT_LIMIT));
   const cursorParam = url.searchParams.get("cursor");
 
-  let where = "deleted_at IS NULL";
+  // `status` keeps videos out of the feed until their bytes have actually
+  // landed in R2 — a row is created when a multipart upload starts, which can be
+  // minutes before it finishes.
+  let where = "deleted_at IS NULL AND status = 'ready'";
   const params: (string | number)[] = [];
   if (cursorParam) {
     const [createdAtStr, id] = cursorParam.split(":");
@@ -38,23 +33,16 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, data }) =
   params.push(limit);
 
   const { results } = await env.DB.prepare(
-    `SELECT id, width, height, uploader_id, uploader_name, created_at
+    `SELECT id, width, height, uploader_id, uploader_name, created_at, kind, duration_ms
        FROM photos
       WHERE ${where}
       ORDER BY created_at DESC, id DESC
       LIMIT ?`
   )
     .bind(...params)
-    .all<PhotoRow>();
+    .all<MediaRow>();
 
-  const photos = results.map((row) => ({
-    id: row.id,
-    width: row.width,
-    height: row.height,
-    uploaderName: row.uploader_name,
-    createdAt: row.created_at,
-    canDelete: session.role === "admin" || row.uploader_id === session.uid,
-  }));
+  const photos = results.map((row) => toMediaDTO(row, session));
 
   const last = results[results.length - 1];
   const nextCursor = results.length === limit && last ? `${last.created_at}:${last.id}` : null;
@@ -65,14 +53,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, data }) =
 export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) => {
   const session = getSession(data);
 
-  const deadline = Date.parse(env.UPLOAD_DEADLINE);
-  if (!Number.isFinite(deadline)) {
-    // Fail open so a config slip never blocks a guest mid-reception, but make
-    // it loud: with no deadline there is no bound on R2 spend.
-    console.warn(`UPLOAD_DEADLINE is not a parseable date (${env.UPLOAD_DEADLINE}); uploads are unbounded`);
-  } else if (Date.now() > deadline) {
-    return errorJson("Uploads are closed — thanks for sharing your photos!", 403);
-  }
+  const closed = uploadsClosedReason(env.UPLOAD_DEADLINE);
+  if (closed) return errorJson(closed, 403);
 
   const declaredBytes = Number(request.headers.get("content-length"));
   if (Number.isFinite(declaredBytes) && declaredBytes > MAX_BODY_BYTES) {
@@ -112,17 +94,15 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) 
     typeof uploaderNameRaw === "string" && uploaderNameRaw.trim() ? uploaderNameRaw.trim().slice(0, 80) : null;
 
   const id = crypto.randomUUID();
-  const fullKey = `${id}/full.jpg`;
-  const thumbKey = `${id}/thumb.jpg`;
   const [fullBuf, thumbBuf] = await Promise.all([full.arrayBuffer(), thumb.arrayBuffer()]);
 
   try {
     await Promise.all([
-      env.PHOTOS.put(fullKey, fullBuf, { httpMetadata: { contentType: "image/jpeg" } }),
-      env.PHOTOS.put(thumbKey, thumbBuf, { httpMetadata: { contentType: "image/jpeg" } }),
+      env.PHOTOS.put(fullKey(id), fullBuf, { httpMetadata: { contentType: "image/jpeg" } }),
+      env.PHOTOS.put(thumbKey(id), thumbBuf, { httpMetadata: { contentType: "image/jpeg" } }),
     ]);
   } catch {
-    await Promise.allSettled([env.PHOTOS.delete(fullKey), env.PHOTOS.delete(thumbKey)]);
+    await deleteMedia(env.PHOTOS, id).catch(() => {});
     return errorJson("Upload failed, please try again", 502);
   }
 
@@ -136,11 +116,11 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) 
       .bind(id, bytes, width, height, session.uid, uploaderName, createdAt)
       .run();
   } catch {
-    await Promise.allSettled([env.PHOTOS.delete(fullKey), env.PHOTOS.delete(thumbKey)]);
+    await deleteMedia(env.PHOTOS, id).catch(() => {});
     return errorJson("Upload failed, please try again", 502);
   }
 
   return json({
-    photo: { id, width, height, uploaderName, createdAt, canDelete: true },
+    photo: { id, kind: "photo", width, height, durationMs: null, uploaderName, createdAt, canDelete: true },
   });
 };
