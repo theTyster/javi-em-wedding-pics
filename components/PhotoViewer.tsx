@@ -176,18 +176,20 @@ export default function PhotoViewer({
           <a
             href={downloadUrl(photo.id, photo.downloadToken)}
             download
-            className="rounded-full bg-chalk/10 px-4 py-3 text-base text-chalk"
+            aria-label={isVideo ? "Save video" : "Save photo"}
+            className="whitespace-nowrap rounded-full bg-chalk/10 px-4 py-3 text-base text-chalk"
           >
-            {isVideo ? "Save video" : "Save photo"}
+            Save
           </a>
           {photo.canDelete && (
             <button
               type="button"
               onClick={handleDeletePhoto}
               disabled={deleting}
-              className="rounded-full bg-chalk/10 px-4 py-3 text-base text-alarm disabled:text-chalk-dim"
+              aria-label={isVideo ? "Remove video" : "Remove photo"}
+              className="whitespace-nowrap rounded-full bg-chalk/10 px-4 py-3 text-base text-alarm disabled:text-chalk-dim"
             >
-              {deleting ? "Removing…" : isVideo ? "Remove video" : "Remove photo"}
+              {deleting ? "Removing…" : "Remove"}
             </button>
           )}
         </div>
