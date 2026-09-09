@@ -70,21 +70,28 @@ export function downloadFilename(id: string, uploaded: Date, contentType: string
 
 export interface MediaRow {
   id: string;
+  bytes: number;
   width: number;
   height: number;
   uploader_id: string;
   uploader_name: string | null;
   created_at: number;
   kind: string;
+  mime_type: string | null;
   duration_ms: number | null;
 }
 
 export interface MediaDTO {
   id: string;
   kind: "photo" | "video";
+  // Stored size, item plus thumbnail. The album never shows it; it is here so a
+  // multi-select save can weigh a selection before it starts pulling files into
+  // the phone's memory. The thumbnail overcount is noise at that scale.
+  bytes: number;
   width: number;
   height: number;
   durationMs: number | null;
+  mimeType: string | null;
   uploaderName: string | null;
   createdAt: number;
   canDelete: boolean;
@@ -99,9 +106,11 @@ export async function toMediaDTO(
   return {
     id: row.id,
     kind: row.kind === "video" ? "video" : "photo",
+    bytes: row.bytes,
     width: row.width,
     height: row.height,
     durationMs: row.duration_ms,
+    mimeType: row.mime_type,
     uploaderName: row.uploader_name,
     createdAt: row.created_at,
     canDelete: session.role === "admin" || row.uploader_id === session.uid,

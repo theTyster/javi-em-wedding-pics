@@ -46,7 +46,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, data }) =
   params.push(limit);
 
   const { results } = await env.DB.prepare(
-    `SELECT id, width, height, uploader_id, uploader_name, created_at, kind, duration_ms
+    `SELECT id, bytes, width, height, uploader_id, uploader_name, created_at, kind, mime_type, duration_ms
        FROM photos
       WHERE ${where}
       ORDER BY created_at DESC, id DESC
@@ -141,9 +141,11 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) 
     photo: {
       id,
       kind: "photo",
+      bytes,
       width,
       height,
       durationMs: null,
+      mimeType: original.type,
       uploaderName,
       createdAt,
       canDelete: true,

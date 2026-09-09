@@ -82,7 +82,7 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({ params, request,
   const bytes = object.size + thumbBuf.byteLength;
   const row = await env.DB.prepare(
     `UPDATE photos SET bytes = ?, status = 'ready' WHERE id = ?
-     RETURNING id, width, height, uploader_id, uploader_name, created_at, kind, duration_ms`
+     RETURNING id, bytes, width, height, uploader_id, uploader_name, created_at, kind, mime_type, duration_ms`
   )
     .bind(bytes, id)
     .first<MediaRow>();

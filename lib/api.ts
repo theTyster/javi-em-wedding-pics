@@ -1,9 +1,13 @@
 export interface PhotoDTO {
   id: string;
   kind: "photo" | "video";
+  // Stored size, item plus thumbnail — see MediaDTO in functions/_lib/media.ts.
+  // Read by the multi-select save to weigh a selection before fetching it.
+  bytes: number;
   width: number;
   height: number;
   durationMs: number | null;
+  mimeType: string | null;
   uploaderName: string | null;
   createdAt: number;
   canDelete: boolean;
