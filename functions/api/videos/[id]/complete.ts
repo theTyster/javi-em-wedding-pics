@@ -92,5 +92,5 @@ export const onRequestPost: PagesFunction<Env, "id"> = async ({ params, request,
     return errorJson("Upload failed, please try again", 502);
   }
 
-  return json({ photo: toMediaDTO(row, session) });
+  return json({ photo: await toMediaDTO(row, session, env.SESSION_SECRET) });
 };

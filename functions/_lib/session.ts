@@ -106,3 +106,34 @@ export function clearSessionCookieHeader(secure: boolean): string {
 export function getSession(data: Readonly<Record<string, unknown>>): SessionPayload {
   return data.session as SessionPayload;
 }
+
+// A download link carries its own bearer credential instead of relying solely
+// on the session cookie. iOS Safari can hand a Content-Disposition download
+// off to a background system process outside the page's cookie jar — the
+// request that establishes the filename succeeds, then a follow-up request
+// (resuming or continuing the download, which Range makes more likely) arrives
+// with no cookie and gets bounced. 24h is generous enough to outlast a
+// weekend of browsing without turning into a permanent bearer link; a fresh
+// token is minted every time the feed loads, so in practice it keeps renewing
+// itself as guests browse.
+const DOWNLOAD_TOKEN_TTL_SECONDS = 60 * 60 * 24;
+
+export async function signDownloadToken(id: string, secret: string): Promise<string> {
+  const exp = Math.floor(Date.now() / 1000) + DOWNLOAD_TOKEN_TTL_SECONDS;
+  const key = await hmacKey(secret);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(`${id}.${exp}`));
+  return `${exp}.${base64UrlEncode(new Uint8Array(signature))}`;
+}
+
+// The id is part of the signed message, not just a lookup key, so swapping the
+// id in the URL while keeping someone else's token invalidates the signature
+// rather than downloading their photo.
+export async function verifyDownloadToken(token: string, id: string, secret: string): Promise<boolean> {
+  const [expRaw, signature] = token.split(".");
+  const exp = Number(expRaw);
+  if (!signature || !Number.isFinite(exp) || exp < Date.now() / 1000) return false;
+
+  const key = await hmacKey(secret);
+  const expected = await crypto.subtle.sign("HMAC", key, encoder.encode(`${id}.${exp}`));
+  return timingSafeEqual(signature, base64UrlEncode(new Uint8Array(expected)));
+}

@@ -174,7 +174,7 @@ export default function PhotoViewer({
               straight to disk, which a 2 GiB video could not survive being
               buffered into a Blob for. */}
           <a
-            href={downloadUrl(photo.id)}
+            href={downloadUrl(photo.id, photo.downloadToken)}
             download
             className="rounded-full bg-chalk/10 px-4 py-3 text-base text-chalk"
           >

@@ -1,4 +1,5 @@
 import { errorJson } from "./json";
+import { signDownloadToken } from "./session";
 
 // Everything both the photo and video paths need to agree on: where bytes live
 // in R2, which types we are willing to store and serve, and the cost bounds.
@@ -70,9 +71,14 @@ export interface MediaDTO {
   uploaderName: string | null;
   createdAt: number;
   canDelete: boolean;
+  downloadToken: string;
 }
 
-export function toMediaDTO(row: MediaRow, session: { uid: string; role: string }): MediaDTO {
+export async function toMediaDTO(
+  row: MediaRow,
+  session: { uid: string; role: string },
+  secret: string
+): Promise<MediaDTO> {
   return {
     id: row.id,
     kind: row.kind === "video" ? "video" : "photo",
@@ -82,6 +88,7 @@ export function toMediaDTO(row: MediaRow, session: { uid: string; role: string }
     uploaderName: row.uploader_name,
     createdAt: row.created_at,
     canDelete: session.role === "admin" || row.uploader_id === session.uid,
+    downloadToken: await signDownloadToken(row.id, secret),
   };
 }
 

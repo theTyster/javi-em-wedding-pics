@@ -7,6 +7,7 @@ export interface PhotoDTO {
   uploaderName: string | null;
   createdAt: number;
   canDelete: boolean;
+  downloadToken: string;
 }
 
 export interface UploadedPart {
@@ -128,6 +129,12 @@ export function photoUrl(id: string, variant: "thumb" | "full" | "video"): strin
 // The one download path in the app. Every guest, on every platform, gets these
 // bytes — the server picks the best variant it holds and sets the filename, so
 // nothing is left to whatever the browser's long-press menu decides to do.
-export function downloadUrl(id: string): string {
-  return `/api/photos/${id}/file?v=download`;
+//
+// The token rides along in the URL rather than relying on the session cookie:
+// some browsers' download managers (notably iOS Safari, once Range is
+// involved) hand large or resumed downloads off to a process that does not
+// reliably carry cookies. See signDownloadToken's comment in
+// functions/_lib/session.ts for the full story.
+export function downloadUrl(id: string, token: string): string {
+  return `/api/photos/${id}/file?v=download&token=${encodeURIComponent(token)}`;
 }

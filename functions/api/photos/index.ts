@@ -2,6 +2,7 @@ import type { Env } from "../../_lib/env";
 import { getSession } from "../../_lib/session";
 import { json, errorJson } from "../../_lib/json";
 import { deleteMedia, fullKey, thumbKey, toMediaDTO, uploadsClosedReason, type MediaRow } from "../../_lib/media";
+import { signDownloadToken } from "../../_lib/session";
 
 const MAX_LIMIT = 60;
 const DEFAULT_LIMIT = 30;
@@ -42,7 +43,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env, data }) =
     .bind(...params)
     .all<MediaRow>();
 
-  const photos = results.map((row) => toMediaDTO(row, session));
+  const photos = await Promise.all(results.map((row) => toMediaDTO(row, session, env.SESSION_SECRET)));
 
   const last = results[results.length - 1];
   const nextCursor = results.length === limit && last ? `${last.created_at}:${last.id}` : null;
@@ -121,6 +122,16 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) 
   }
 
   return json({
-    photo: { id, kind: "photo", width, height, durationMs: null, uploaderName, createdAt, canDelete: true },
+    photo: {
+      id,
+      kind: "photo",
+      width,
+      height,
+      durationMs: null,
+      uploaderName,
+      createdAt,
+      canDelete: true,
+      downloadToken: await signDownloadToken(id, env.SESSION_SECRET),
+    },
   });
 };
