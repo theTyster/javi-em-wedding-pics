@@ -3,6 +3,7 @@ import { errorJson } from "../../../_lib/json";
 import {
   downloadFilename,
   fullKey,
+  isAllowedImageType,
   isAllowedVideoType,
   origKey,
   routeParam,
@@ -10,13 +11,13 @@ import {
   videoKey,
 } from "../../../_lib/media";
 
-// `download` is a ladder, not a key: it prefers the untouched original and
-// falls back to the 2048px render. Only the render exists today, so every
-// download resolves there — but the guest-facing URL never has to change if
-// originals are turned on later.
+// Each variant is a ladder, not a key. Photos uploaded now store the guest's
+// own file at `orig`; photos from before that store a 2048px JPEG render at
+// `full.jpg` and nothing else. Trying `orig` first and falling back means one
+// URL serves both eras, and no back-fill was needed to switch over.
 const VARIANTS = {
   thumb: (id: string) => [thumbKey(id)],
-  full: (id: string) => [fullKey(id)],
+  full: (id: string) => [origKey(id), fullKey(id)],
   video: (id: string) => [videoKey(id)],
   download: (id: string) => [origKey(id), videoKey(id), fullKey(id)],
 } satisfies Record<string, (id: string) => string[]>;
@@ -29,14 +30,16 @@ function parseVariant(url: URL): Variant {
   return v === "full" || v === "video" || v === "download" ? v : "thumb";
 }
 
-// The bytes under `${id}/video` were supplied by a guest, and this endpoint is
-// same-origin with the album. Serving a stored content type back verbatim would
-// let an upload that slipped past validation be served as, say, text/html — so
-// the type is re-derived from an allowlist on the way out too. Anything we don't
-// recognise is served as an opaque download rather than trusted.
+// The bytes under `${id}/orig` and `${id}/video` were supplied by a guest, and
+// this endpoint is same-origin with the album. Serving a stored content type
+// back verbatim would let an upload that slipped past validation be served as,
+// say, text/html — so the type is re-derived from an allowlist on the way out
+// too. Anything we don't recognise is served as an opaque download rather than
+// trusted. The `.jpg` keys are ours, written by this app and never anything but
+// JPEG, so they don't need the stored value at all.
 function safeContentType(key: string, stored: string | undefined): string {
   if (key.endsWith(".jpg")) return "image/jpeg";
-  if (isAllowedVideoType(stored)) return stored as string;
+  if (isAllowedImageType(stored) || isAllowedVideoType(stored)) return stored as string;
   return "application/octet-stream";
 }
 

@@ -6,8 +6,18 @@ import { signDownloadToken } from "./session";
 
 export const VIDEO_MIME_TYPES = ["video/mp4", "video/quicktime", "video/webm"] as const;
 
+// Photos are stored in whatever format the guest's camera produced, so long as
+// every browser can display it. The client converts anything outside this list
+// (HEIC, in practice) to JPEG before uploading, so these are also exactly the
+// types this app ever has to serve back.
+export const IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"] as const;
+
 export function isAllowedVideoType(type: string | undefined | null): boolean {
   return typeof type === "string" && (VIDEO_MIME_TYPES as readonly string[]).includes(type);
+}
+
+export function isAllowedImageType(type: string | undefined | null): boolean {
+  return typeof type === "string" && (IMAGE_MIME_TYPES as readonly string[]).includes(type);
 }
 
 // 2 GiB covers anything a phone shoots, including a few minutes of 4K. It is
@@ -25,15 +35,22 @@ export const MAX_VIDEO_PARTS = Math.ceil(MAX_VIDEO_BYTES / VIDEO_PART_SIZE);
 // and no caller has to know which variants exist.
 export const mediaPrefix = (id: string) => `${id}/`;
 export const thumbKey = (id: string) => `${id}/thumb.jpg`;
-export const fullKey = (id: string) => `${id}/full.jpg`;
 export const videoKey = (id: string) => `${id}/video`;
-// Not written today — uploads are downscaled in the browser before they leave
-// the phone. The download path already looks here first, so switching originals
-// on later is a change to the upload path alone.
+// Where a photo lives: the guest's own file, byte for byte, in whatever format
+// they shot it (or a full-resolution JPEG if it arrived as HEIC). Extensionless
+// because the format varies — the content type travels in R2's own metadata.
 export const origKey = (id: string) => `${id}/orig`;
+// Legacy. Photos uploaded before originals were kept are a 2048px JPEG render
+// and have no `orig`, so both the viewer and the download fall back to this.
+// Nothing writes it any more.
+export const fullKey = (id: string) => `${id}/full.jpg`;
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/avif": "avif",
   "video/mp4": "mp4",
   "video/quicktime": "mov",
   "video/webm": "webm",

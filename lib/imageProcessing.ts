@@ -1,8 +1,11 @@
 export interface ProcessedImage {
-  full: Blob;
+  /** The bytes to store: the guest's file itself, unless it had to be converted. */
+  original: Blob;
   thumb: Blob;
   width: number;
   height: number;
+  /** True when the format forced a re-encode, so the caller can say so. */
+  converted: boolean;
 }
 
 export interface ProcessedVideo {
@@ -12,22 +15,54 @@ export interface ProcessedVideo {
   durationMs: number | null;
 }
 
-const FULL_MAX_EDGE = 2048;
+// Formats every current browser can display. A file already in one of these is
+// stored exactly as the camera wrote it — no resize, no re-encode, EXIF and all.
+const WEB_SAFE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+
 const THUMB_MAX_EDGE = 400;
-const FULL_QUALITY = 0.82;
 const THUMB_QUALITY = 0.75;
+// Only reached when a format has to be converted at all — an iPhone HEIC, most
+// often. Full resolution, and high enough that the re-encode is not something
+// you could pick out of a lineup next to the original.
+const CONVERT_QUALITY = 0.95;
 
 // A video that never fires `loadedmetadata` — an codec the browser can't open,
 // a file the picker handed us in a format it can't decode — would otherwise
 // leave the upload hanging with a spinner and no way out.
 const POSTER_TIMEOUT_MS = 15000;
 
+/**
+ * Prepares a photo for upload without degrading it.
+ *
+ * The only thing every photo gets is a 400px thumbnail for the grid — a derived
+ * extra, not a replacement. The photo itself is passed through untouched when
+ * the browser can already display its format, which covers everything a phone
+ * or a camera produces except HEIC. HEIC has to be re-encoded or half the
+ * guests could not view it, so it becomes a full-resolution JPEG: same pixels,
+ * same dimensions, only the container changes.
+ *
+ * The re-encode does cost the EXIF block (capture time, camera, GPS), because a
+ * canvas only carries pixels. Untouched files keep theirs.
+ */
 export async function processImage(file: File): Promise<ProcessedImage> {
   const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   try {
-    const full = await drawAndEncode(bitmap, bitmap.width, bitmap.height, FULL_MAX_EDGE, FULL_QUALITY);
     const thumb = await drawAndEncode(bitmap, bitmap.width, bitmap.height, THUMB_MAX_EDGE, THUMB_QUALITY);
-    return { full: full.blob, thumb: thumb.blob, width: full.width, height: full.height };
+
+    if (WEB_SAFE_IMAGE_TYPES.has(file.type)) {
+      return { original: file, thumb: thumb.blob, width: bitmap.width, height: bitmap.height, converted: false };
+    }
+
+    // `null` max edge means "do not scale" — the conversion is a format change
+    // only, so the output keeps every pixel the original had.
+    const converted = await drawAndEncode(bitmap, bitmap.width, bitmap.height, null, CONVERT_QUALITY);
+    return {
+      original: converted.blob,
+      thumb: thumb.blob,
+      width: bitmap.width,
+      height: bitmap.height,
+      converted: true,
+    };
   } finally {
     bitmap.close();
   }
@@ -125,10 +160,10 @@ async function drawAndEncode(
   source: CanvasImageSource,
   sourceWidth: number,
   sourceHeight: number,
-  maxEdge: number,
+  maxEdge: number | null,
   quality: number
 ): Promise<{ blob: Blob; width: number; height: number }> {
-  const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
+  const scale = maxEdge === null ? 1 : Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
   const width = Math.max(1, Math.round(sourceWidth * scale));
   const height = Math.max(1, Math.round(sourceHeight * scale));
 

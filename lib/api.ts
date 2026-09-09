@@ -63,9 +63,14 @@ export function listPhotos(cursor?: string | null) {
   return call<{ photos: PhotoDTO[]; nextCursor: string | null }>(`/api/photos${qs}`);
 }
 
-export function uploadPhoto(image: { full: Blob; thumb: Blob; width: number; height: number }, uploaderName: string) {
+export function uploadPhoto(
+  image: { original: Blob; thumb: Blob; width: number; height: number },
+  uploaderName: string
+) {
   const form = new FormData();
-  form.append("full", image.full, "full.jpg");
+  // The part's own Content-Type carries the real format through to the server,
+  // which is what decides how the file is stored and served back.
+  form.append("original", image.original, "original");
   form.append("thumb", image.thumb, "thumb.jpg");
   form.append("width", String(image.width));
   form.append("height", String(image.height));

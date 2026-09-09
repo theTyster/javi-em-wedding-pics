@@ -1,17 +1,29 @@
 import type { Env } from "../../_lib/env";
 import { getSession } from "../../_lib/session";
 import { json, errorJson } from "../../_lib/json";
-import { deleteMedia, fullKey, thumbKey, toMediaDTO, uploadsClosedReason, type MediaRow } from "../../_lib/media";
+import {
+  deleteMedia,
+  isAllowedImageType,
+  origKey,
+  thumbKey,
+  toMediaDTO,
+  uploadsClosedReason,
+  type MediaRow,
+} from "../../_lib/media";
 import { signDownloadToken } from "../../_lib/session";
 
 const MAX_LIMIT = 60;
 const DEFAULT_LIMIT = 30;
-const MAX_FULL_BYTES = 8 * 1024 * 1024;
+// Photos are stored at their original size now, so this has to clear a full
+// camera JPEG rather than a 2048px render — a 48MP phone shot is ~15 MB, a
+// high-megapixel DSLR JPEG rarely past 25. Kept well under Cloudflare's 100 MB
+// request cap because `formData()` buffers the body in the worker's memory.
+const MAX_ORIGINAL_BYTES = 32 * 1024 * 1024;
 const MAX_THUMB_BYTES = 1 * 1024 * 1024;
 // Reject oversized bodies from the header, before `formData()` buffers the
 // whole thing into the worker's 128 MB of memory. Generous slack over
-// full + thumb for multipart framing and the other fields.
-const MAX_BODY_BYTES = MAX_FULL_BYTES + MAX_THUMB_BYTES + 1024 * 1024;
+// original + thumb for multipart framing and the other fields.
+const MAX_BODY_BYTES = MAX_ORIGINAL_BYTES + MAX_THUMB_BYTES + 1024 * 1024;
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env, data }) => {
   const session = getSession(data);
@@ -69,21 +81,23 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) 
     return errorJson("Invalid upload", 400);
   }
 
-  const full = form.get("full");
+  const original = form.get("original");
   const thumb = form.get("thumb");
   const widthRaw = form.get("width");
   const heightRaw = form.get("height");
   const uploaderNameRaw = form.get("uploaderName");
 
-  if (!(full instanceof File) || !(thumb instanceof File)) {
+  if (!(original instanceof File) || !(thumb instanceof File)) {
     return errorJson("Missing photo data", 400);
   }
-  if (!full.type.startsWith("image/") || !thumb.type.startsWith("image/")) {
-    return errorJson("Only images are allowed", 400);
+  // An exact allowlist rather than an `image/` prefix: these bytes are served
+  // back from the album's own origin, so the set of formats that can be stored
+  // has to be the same set the file endpoint is willing to name on the way out.
+  if (!isAllowedImageType(original.type) || !thumb.type.startsWith("image/")) {
+    return errorJson("That photo format isn't supported.", 400);
   }
-  if (full.size > MAX_FULL_BYTES || thumb.size > MAX_THUMB_BYTES) {
-    return errorJson("Photo is too large", 400);
-  }
+  if (original.size > MAX_ORIGINAL_BYTES) return errorJson("Photo is too large", 413);
+  if (thumb.size > MAX_THUMB_BYTES) return errorJson("Photo is too large", 400);
 
   const width = Math.round(Number(widthRaw));
   const height = Math.round(Number(heightRaw));
@@ -95,12 +109,14 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) 
     typeof uploaderNameRaw === "string" && uploaderNameRaw.trim() ? uploaderNameRaw.trim().slice(0, 80) : null;
 
   const id = crypto.randomUUID();
-  const [fullBuf, thumbBuf] = await Promise.all([full.arrayBuffer(), thumb.arrayBuffer()]);
 
   try {
     await Promise.all([
-      env.PHOTOS.put(fullKey(id), fullBuf, { httpMetadata: { contentType: "image/jpeg" } }),
-      env.PHOTOS.put(thumbKey(id), thumbBuf, { httpMetadata: { contentType: "image/jpeg" } }),
+      // The File goes to R2 as-is rather than through `arrayBuffer()`: it keeps
+      // a second full-size copy of a 32 MB photo out of the worker's memory,
+      // and it is the guest's exact bytes that get stored either way.
+      env.PHOTOS.put(origKey(id), original, { httpMetadata: { contentType: original.type } }),
+      env.PHOTOS.put(thumbKey(id), thumb, { httpMetadata: { contentType: "image/jpeg" } }),
     ]);
   } catch {
     await deleteMedia(env.PHOTOS, id).catch(() => {});
@@ -108,13 +124,13 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env, data }) 
   }
 
   const createdAt = Date.now();
-  const bytes = fullBuf.byteLength + thumbBuf.byteLength;
+  const bytes = original.size + thumb.size;
   try {
     await env.DB.prepare(
-      `INSERT INTO photos (id, bytes, width, height, uploader_id, uploader_name, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO photos (id, bytes, width, height, uploader_id, uploader_name, created_at, mime_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-      .bind(id, bytes, width, height, session.uid, uploaderName, createdAt)
+      .bind(id, bytes, width, height, session.uid, uploaderName, createdAt, original.type)
       .run();
   } catch {
     await deleteMedia(env.PHOTOS, id).catch(() => {});
