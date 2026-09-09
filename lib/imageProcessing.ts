@@ -26,10 +26,14 @@ const THUMB_QUALITY = 0.75;
 // you could pick out of a lineup next to the original.
 const CONVERT_QUALITY = 0.95;
 
-// A video that never fires `loadedmetadata` — an codec the browser can't open,
-// a file the picker handed us in a format it can't decode — would otherwise
-// leave the upload hanging with a spinner and no way out.
-const POSTER_TIMEOUT_MS = 15000;
+// Budgeted per phase rather than one deadline for the whole capture: opening a
+// 57 MB clip off a phone's storage is the slow part, and spending the same
+// budget on it as on the seek is what cut real captures short before. A file
+// the browser genuinely cannot open still has to give up rather than leave the
+// upload hanging with a spinner and no way out.
+const METADATA_TIMEOUT_MS = 30000;
+const SEEK_TIMEOUT_MS = 8000;
+const FRAME_TIMEOUT_MS = 4000;
 
 /**
  * Prepares a photo for upload without degrading it.
@@ -68,92 +72,197 @@ export async function processImage(file: File): Promise<ProcessedImage> {
   }
 }
 
+// Only one video is decoded at a time. iOS limits how many video pipelines can
+// run at once, and uploads run two files in parallel — which is exactly the
+// shape of the failures we saw in production, every one of them arriving in a
+// same-second pair. This queue is deliberately around the decode only, so two
+// videos still push their bytes to R2 in parallel.
+let posterQueue: Promise<unknown> = Promise.resolve();
+
+function serializeDecode<T>(work: () => Promise<T>): Promise<T> {
+  const run = posterQueue.then(work, work);
+  posterQueue = run.catch(() => undefined);
+  return run;
+}
+
 // Videos are stored exactly as the phone recorded them — there is no practical
 // way to transcode a 2 GiB file in a browser tab — so the only thing to prepare
 // is the poster frame the grid and the player show. It goes through the same
 // encoder as a photo thumbnail, at the same size and quality, so a video tile
 // and a photo tile are indistinguishable until you look for the play badge.
 export async function processVideo(file: File): Promise<ProcessedVideo> {
+  return serializeDecode(() => capturePoster(file));
+}
+
+async function capturePoster(file: File): Promise<ProcessedVideo> {
   const url = URL.createObjectURL(file);
   const video = document.createElement("video");
-  video.preload = "auto";
+
+  // iOS decides whether it may autoplay by reading the *attributes*, not just
+  // the properties, and it makes that decision as the source loads — so both
+  // have to be set before `src`.
   video.muted = true;
+  video.defaultMuted = true;
   video.playsInline = true;
-  video.src = url;
+  video.setAttribute("muted", "");
+  video.setAttribute("playsinline", "");
+  video.setAttribute("autoplay", "");
+  video.preload = "auto";
+
+  // iOS will not decode a <video> that is outside the document, and it counts
+  // `display:none` as outside. Rendered, one pixel, off the edge of the screen.
+  video.style.cssText =
+    "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none";
+  document.body.appendChild(video);
 
   try {
-    const ready = await seekToFirstFrame(video);
-    if (!ready) return placeholderPoster();
+    const opened = await openVideo(video, url);
+    // Nothing at all could be read from the file — no dimensions, no duration.
+    if (!opened) return placeholderPoster(null, null, null);
 
     const width = video.videoWidth;
     const height = video.videoHeight;
-    if (!width || !height) return placeholderPoster();
+    const durationMs = Number.isFinite(video.duration) && video.duration > 0
+      ? Math.round(video.duration * 1000)
+      : null;
+    if (!width || !height) return placeholderPoster(null, null, durationMs);
 
-    const thumb = await drawAndEncode(video, width, height, THUMB_MAX_EDGE, THUMB_QUALITY);
-    const durationMs = Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : null;
-    return { thumb: thumb.blob, width, height, durationMs };
+    // Metadata is in hand from here on, so even if the frame grab fails the row
+    // still gets the clip's real shape and runtime rather than a wrong default.
+    try {
+      await seekToPosterFrame(video);
+      const thumb = await drawAndEncode(video, width, height, THUMB_MAX_EDGE, THUMB_QUALITY);
+      return { thumb: thumb.blob, width, height, durationMs };
+    } catch {
+      return placeholderPoster(width, height, durationMs);
+    }
   } catch {
-    return placeholderPoster();
+    return placeholderPoster(null, null, null);
   } finally {
+    try {
+      video.pause();
+    } catch {
+      // Already torn down; nothing to stop.
+    }
     video.removeAttribute("src");
     video.load();
+    video.remove();
     URL.revokeObjectURL(url);
   }
 }
 
-// Resolves false rather than throwing when the browser can't open the file:
-// a clip we can't preview is still a clip worth keeping, so it uploads with a
-// stand-in poster instead of failing.
-function seekToFirstFrame(video: HTMLVideoElement): Promise<boolean> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(ok);
-    };
-    const timer = setTimeout(() => finish(false), POSTER_TIMEOUT_MS);
+// Gets the file open far enough to read its dimensions and duration. The
+// `play()` is the load-bearing part on a phone: iOS ignores `preload` and will
+// not fetch frame data until something plays, so without it `loadedmetadata`
+// simply never fires and the capture times out. Muted and inline is the one
+// form of autoplay iOS allows with no user gesture behind it.
+async function openVideo(video: HTMLVideoElement, url: string): Promise<boolean> {
+  const failed = eventOnce(video, "error").then(() => false);
+  const ready = eventOnce(video, "loadedmetadata").then(() => true);
 
-    video.addEventListener("error", () => finish(false), { once: true });
-    video.addEventListener("seeked", () => finish(true), { once: true });
-    video.addEventListener(
-      "loadeddata",
-      () => {
-        // A hair into the clip rather than 0: the very first frame of a phone
-        // recording is often the black one from before the sensor settles.
-        const target = Number.isFinite(video.duration) ? Math.min(0.1, video.duration / 2) : 0.1;
-        if (video.currentTime === target) finish(true);
-        else video.currentTime = target;
-      },
-      { once: true }
-    );
+  video.src = url;
+  video.load();
+  const playing = video.play().catch(() => undefined);
+
+  const opened = await Promise.race([ready, failed, delay(METADATA_TIMEOUT_MS).then(() => false)]);
+  await playing;
+  try {
+    video.pause();
+  } catch {
+    // A play() that never started has nothing to pause.
+  }
+  return opened;
+}
+
+async function seekToPosterFrame(video: HTMLVideoElement): Promise<void> {
+  // A hair into the clip rather than 0: the very first frame of a phone
+  // recording is often the black one from before the sensor settles. Very short
+  // clips stay at 0 rather than seeking past the end.
+  const target = Number.isFinite(video.duration) && video.duration > 0.3 ? 0.1 : 0;
+
+  if (target > 0 && Math.abs(video.currentTime - target) > 0.01) {
+    const seeked = eventOnce(video, "seeked");
+    video.currentTime = target;
+    await Promise.race([seeked, delay(SEEK_TIMEOUT_MS)]);
+  }
+  await nextDecodedFrame(video);
+}
+
+// `seeked` means the playback position moved, not that a frame is on screen —
+// drawing straight after it is how you end up with a blank canvas. When the
+// browser offers requestVideoFrameCallback it will say precisely when a frame
+// has been composited; otherwise a couple of animation frames is the best
+// available approximation.
+function nextDecodedFrame(video: HTMLVideoElement): Promise<void> {
+  const withCallback = video as HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: () => void) => number;
+  };
+
+  if (typeof withCallback.requestVideoFrameCallback === "function") {
+    return Promise.race([
+      new Promise<void>((resolve) => withCallback.requestVideoFrameCallback!(() => resolve())),
+      delay(FRAME_TIMEOUT_MS),
+    ]);
+  }
+
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
+}
+
+function eventOnce(target: EventTarget, event: string): Promise<Event> {
+  return new Promise((resolve) => target.addEventListener(event, resolve, { once: true }));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Ink-coloured with a champagne play mark, matching the palette in globals.css,
 // so an undecodable clip looks deliberate in the grid rather than broken.
-async function placeholderPoster(): Promise<ProcessedVideo> {
-  const width = 640;
-  const height = 360;
+//
+// Takes the clip's real shape and runtime when they are known. Reporting a
+// fixed 640x360 for everything is what filed a library of portrait phone videos
+// as landscape and left every duration badge blank — the poster being a
+// stand-in is no reason for the row to be wrong too.
+async function placeholderPoster(
+  videoWidth: number | null,
+  videoHeight: number | null,
+  durationMs: number | null
+): Promise<ProcessedVideo> {
+  // The dimensions reported back describe the clip; the canvas is drawn at
+  // thumbnail scale like every other poster, keeping the clip's aspect ratio so
+  // the tile is not letterboxed differently from a real frame.
+  const width = videoWidth ?? 640;
+  const height = videoHeight ?? 360;
+  const scale = Math.min(1, THUMB_MAX_EDGE / Math.max(width, height));
+  const canvasWidth = Math.max(1, Math.round(width * scale));
+  const canvasHeight = Math.max(1, Math.round(height * scale));
+
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas is not supported on this device");
 
   ctx.fillStyle = "#120d18";
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // Sized off the canvas rather than in fixed pixels, so the mark reads the
+  // same on a square tile as on a tall one.
+  const mark = Math.max(12, Math.min(canvasWidth, canvasHeight) * 0.18);
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight / 2;
   ctx.fillStyle = "#e0bd7f";
   ctx.beginPath();
-  ctx.moveTo(width / 2 - 28, height / 2 - 34);
-  ctx.lineTo(width / 2 + 38, height / 2);
-  ctx.lineTo(width / 2 - 28, height / 2 + 34);
+  ctx.moveTo(cx - mark * 0.6, cy - mark);
+  ctx.lineTo(cx + mark, cy);
+  ctx.lineTo(cx - mark * 0.6, cy + mark);
   ctx.closePath();
   ctx.fill();
 
   const blob = await canvasToBlob(canvas, THUMB_QUALITY);
-  return { thumb: blob, width, height, durationMs: null };
+  return { thumb: blob, width, height, durationMs };
 }
 
 async function drawAndEncode(
